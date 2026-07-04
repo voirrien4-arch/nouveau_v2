@@ -313,7 +313,7 @@ async function handlePendingPairing() {
 // ── Request Pairing Code ──
 export async function requestPairingCode(phone) {
   return new Promise(async (resolve, reject) => {
-    // Check if bot is still initializing
+    // If bot is still initializing with no socket yet, wait briefly
     if (botStatus.initializing && !sock) {
       reject(new Error('Le bot est en cours de démarrage. Patientez 10 secondes et réessayez.'));
       return;
@@ -330,10 +330,31 @@ export async function requestPairingCode(phone) {
       return;
     }
 
-    // If registered (saved session), don't allow pairing — must reset first
+    // If registered but not connected, auto-reset session for fresh pairing
     if (botStatus.registered && !pendingPairing) {
-      reject(new Error('Une session existante a été détectée. Supprimez-la d\'abord avec le bouton ci-dessous.'));
-      return;
+      console.log('🔄 Session existante détectée — suppression pour nouveau pairing...');
+      try {
+        // Clean up old socket
+        sock.ev.removeAllListeners('connection.update');
+        sock.ev.removeAllListeners('creds.update');
+        sock.ev.removeAllListeners('messages.upsert');
+        sock.ev.removeAllListeners('group-participants.update');
+        sock.end(undefined);
+      } catch {}
+      sock = null;
+
+      // Delete old auth
+      if (fs.existsSync('./auth_info')) {
+        fs.rmSync('./auth_info', { recursive: true, force: true });
+      }
+      botStatus.registered = false;
+      botStatus.connected = false;
+      botStatus.phone = null;
+      botStatus.lastError = null;
+
+      // Restart bot in background — it will pick up pendingPairing
+      isStarting = false;
+      setTimeout(() => startBot(), 1000);
     }
 
     const cleanPhone = phone.replace(/[\s\-\(\)\+]/g, '');
@@ -392,6 +413,8 @@ export function deleteSession() {
       sock = null;
     }
     console.log('🗑️ Session supprimée');
+    // Reset start guard so startBot() can proceed
+    isStarting = false;
     return true;
   } catch (err) {
     console.error('Erreur suppression session:', err.message);
